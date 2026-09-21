@@ -1,4 +1,7 @@
 neoxd - hex dumper and analyzer
+
+---
+
 ![A preview](assets/preview1.jpg)
 
 neoxd is a to-date(modern), high-performance, feature-full hex dumper and binary analysis UNIX(i stress that because this is surely not built for Windows as it specifically uses UNIX-specific modules) utility written in Nim, engineered as a modern direct replacement for traditional UNIX tools such as `xxd` and `hexdump` and also most hex dumpers which claims to be replacemnets for the traditional ones.
