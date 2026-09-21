@@ -1,0 +1,112 @@
+.TH NEOXD 1 "September 2026" "neoxd" "User Manual"
+.SH NAME
+neoxd \- hex dumper and analyzer
+.SH SYNOPSIS
+.B neoxd
+[\fIOPTIONS\fR] [\fIFILE\fR|\fB\-\fR]
+.SH DESCRIPTION
+.B neoxd
+is a modern replacement for standard UNIX hex dumpers like \fBxxd\fR and \fBhexdump\fR.
+It is to-date, feature-full hex dumper and binary analysis UNIX(i stress that because this is surely not built for Windows as it specifically uses UNIX-specific modules) utility written in Nim, engineered as a modern direct replacement for traditional UNIX tools such as `xxd` and `hexdump` and also most hex dumpers which claims to be replacemnets for the traditional ones. While xxd and other dumpers present raw binary data as a static, uniform grid of hex bytes, *neoxd* treats binary data as a structured, dynamic information stream. It pairs raw inspection with real-time statistical entropy analysis(using Shannon), automatic signature and file type detection, summarization,  dump reversal and restoration, and proactive CLI guardrails. It natively binds to standard C functions to automatically pipe output into a terminal pager (defaulting to `less -RFX`) if the output isn't being redirected to a file. So, it is simple enough for daily use yet it is far better utility than traditional ones.
+.PP
+Additionally, \fBneoxd\fR incorporates the PRUFER guardrail engine to prevent accidental file truncation or overwriting caused by inverted command-line arguments.
+.SH OPTIONS
+.TP
+\fB\-c\fR, \fB\-\-cols\fR, \fB\-\-columns\fR=\fIINT\fR
+Number of octets per line (default: 16)
+.TP
+\fB\-w\fR, \fB\-\-window\fR=\fIINT\fR
+Set the sliding window size for entropy calculation (default: 256)
+.TP
+\fB\-s\fR, \fB\-\-summary\fR
+Scan the target file and output a comprehensive file summary report, including entropy classification, structural block density, byte frequency histogram, and embedded magic headers.
+.TP
+\fB\-o\fR, \fB\-\-output\fR=\fIFILE\fR
+Write output directly to \fIFILE\fR. Disables ANSI color codes automatically unless \fB\-\-color\fR is explicitly set.
+.TP
+\fB\-\-no\-color\fR
+Disable ANSI color escape sequences.
+.TP
+\fB\-\-color\fR
+Force ANSI color escape sequences even when piping output or writing to a file.
+.TP
+\fB\-\-no\-pager\fR
+Disable automatic terminal pager redirection. By default, interactive terminal output invokes the environment pager specified in \fB$PAGER\fR or falls back to \fBless \-RFX\fR.
+.TP
+\fB\-\-min\fR, \fB\-\-min\-entropy\fR=\fIFLOAT\fR
+Only output lines/blocks with a rolling entropy value greater than or equal to \fIFLOAT\fR (range: 0.0 to 8.0).
+.TP
+\fB\-\-max\fR, \fB\-\-max\-entropy\fR=\fIFLOAT\fR
+Only output lines/blocks with a rolling entropy value less than or equal to \fIFLOAT\fR (range: 0.0 to 8.0).
+.TP
+\fB\-p\fR, \fB\-\-plain\fR
+Output in plain hexadecimal format (continuous hex bytes without offset addresses or ASCII representations).
+.TP
+\fB\-k\fR, \fB\-\-seek\fR=\fIOFFSET\fR
+Start reading at byte offset \fIOFFSET\fR. Accepts decimal values (e.g., 4096) or hexadecimal values prefixed with \fB0x\fR (e.g., 0x1000).
+.TP
+\fB\-n\fR, \fB\-\-length\fR=\fIBYTES\fR
+Process at most \fIBYTES\fR from the input stream.
+.TP
+\fB\-r\fR, \fB\-\-reverse\fR
+Reverse a hex dump stream back into raw binary bytes.
+.TP
+\fB\-R\fR, \fB\-\-restore\fR
+Restore a malformed or heavily modified hex dump back into a clean formatted dump representation.
+.TP
+\fB\-m\fR, \fB\-\-magic\fR=\fIFILE\fR
+Load custom magic byte signatures from a CSV file (Format: \fIHEX_BYTES,Label\fR).
+.TP
+\fB\-\-nop\fR, \fB\-\-no\-prufer\fR
+Bypass PRUFER argument validation, flag typo suggestions, and safety checks.
+.TP
+\fB\-d\fR, \fB\-\-debug\fR
+Enable debug diagnostics and print detailed error logs to \fIstderr\fR.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Show built-in usage instructions and exit.
+.TP
+\fB\-v\fR, \fB\-\-version\fR
+Print program version and license info.
+.SH SAFETY GUARDS (PRUFER)
+\fBneoxd\fR includes the PRUFER validation subsystem enabled by default to prevent catastrophic data destruction:
+.IP \(bu 3
+\fBTypo Detection:\fR Catches invalid option flags and suggests corrections using Levenshtein distance matching.
+.IP \(bu 3
+\fBFile Swap Prevention:\fR Aborts execution if an existing target file is passed as an output argument while the input file does not exist.
+.IP \(bu 3
+\fBBinary Target Protection:\fR Blocks writing raw hex text directly into known binary extensions (.bin, .elf, .exe, .png, etc.) unless restore mode is active.
+.SH ENVIRONMENT
+.TP
+\fBPAGER\fR
+Determines the terminal pager command used for interactive output. Defaults to \fBless \-RFX\fR if unset.
+.SH EXAMPLES
+Inspect a firmware file using 32 octets per line:
+.RS
+.B neoxd \-c 32 firmware.bin
+.RE
+.PP
+Show only packed or encrypted blocks with high entropy:
+.RS
+.B neoxd \-\-min=7.2 target.bin
+.RE
+.PP
+Generate a structural distribution summary report:
+.RS
+.B neoxd \-s binary.elf
+.RE
+.PP
+Safely write a hex dump to a file without risk of source file destruction:
+.RS
+.B neoxd \-o dump.txt image.jpg
+.RE
+.PP
+Reconstruct binary data from stdin in plain hex format:
+.RS
+.B cat dump.hex | neoxd \-r \-p > original.bin
+.RE
+.SH AUTHORS
+nulsie et al.
+.SH COPYRIGHT
+License GPLv3: GNU GPL version 3 only <https://gnu.org/licenses/gpl.html>.
+This is free software: you are free to change and redistribute it. There is NO WARRANTY, to the extent permitted by law.

@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nim & Musl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          curl https://nim-lang.org/choosenim/init.sh -sSf | sh -s -- -y
+          echo "$HOME/.nimble/bin" >> $GITHUB_PATH
+
+      - name: Build Static Binary
+        run: |
+          mkdir -p bin
+          nim c -d:danger --opt:speed --gcc.exe:musl-gcc --gcc.linkerexe:musl-gcc --passL:"-static" --out:bin/neoxd src/neoxd.nim
+          cd bin && tar -czvf neoxd-${{ github.ref_name }}-x86_64-linux-musl.tar.gz neoxd
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: bin/neoxd-*.tar.gz
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nim
+        run: |
+          brew install nim
+
+      - name: Build macOS Universal Binary
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          mkdir -p bin
+          nim c -d:danger --opt:speed --passC:"-target x86_64-apple-macos11" --passL:"-target x86_64-apple-macos11" --out:bin/neoxd-x86_64 src/neoxd.nim
+          nim c -d:danger --opt:speed --passC:"-target arm64-apple-macos11" --passL:"-target arm64-apple-macos11" --out:bin/neoxd-arm64 src/neoxd.nim
+          lipo -create -output bin/neoxd bin/neoxd-x86_64 bin/neoxd-arm64
+          cd bin && tar -czvf neoxd-${{ github.ref_name }}-universal-macos.tar.gz neoxd
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: bin/neoxd-*.tar.gz

@@ -1,0 +1,10 @@
+nimcache/
+*.nimble
+src/neoxd
+neoxd
+
+*.tar.gz
+*.zip
+
+.DS_Store
+*.swp
