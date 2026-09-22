@@ -25,6 +25,7 @@ jobs:
         run: |
           mkdir -p bin
           nim c -d:danger --opt:speed --gcc.exe:musl-gcc --gcc.linkerexe:musl-gcc --passL:"-static" --out:bin/neoxd src/neoxd.nim
+          cp doc/neoxd.1 bin/
           cd bin && tar -czvf neoxd-${{ github.ref_name }}-x86_64-linux-musl.tar.gz neoxd
 
       - name: Upload Release Asset
@@ -49,6 +50,7 @@ jobs:
           nim c -d:danger --opt:speed --passC:"-target x86_64-apple-macos11" --passL:"-target x86_64-apple-macos11" --out:bin/neoxd-x86_64 src/neoxd.nim
           nim c -d:danger --opt:speed --passC:"-target arm64-apple-macos11" --passL:"-target arm64-apple-macos11" --out:bin/neoxd-arm64 src/neoxd.nim
           lipo -create -output bin/neoxd bin/neoxd-x86_64 bin/neoxd-arm64
+          cp doc/neoxd.1 bin/
           cd bin && tar -czvf neoxd-${{ github.ref_name }}-universal-macos.tar.gz neoxd
 
       - name: Upload Release Asset
