@@ -58,7 +58,15 @@ const MagicHeaders = [
   ("\xCA\xFE\xBA\xBE", "Java Class File"),
   ("SQLite format 3\x00", "SQLite Database"),
   ("OggS\x00\x02", "Ogg Vorbis Media"),
-  ("\x52\x49\x46\x46", "RIFF / WAV / AVI")
+  ("\x52\x49\x46\x46", "RIFF / WAV / AVI"),
+  # v1.1.0 add: added more magic headers to deafult set including mach-o support
+  ("7z\xBC\xAF\x27\x1C", "7-Zip Archive"),
+  ("fLaC", "FLAC Audio Stream"),
+  ("BZh", "BZIP2 Compressed File"),
+  ("\xFE\xED\xFA\xCE", "Mach-O Executable (32-bit BE)"),
+  ("\xCE\xFA\xED\xFE", "Mach-O Executable (32-bit LE)"),
+  ("\xFE\xED\xFA\xCF", "Mach-O Executable (64-bit BE)"),
+  ("\xCF\xFA\xED\xFE", "Mach-O Executable (64-bit LE)")
 ]
 
 var HexLUT: array[256, array[2, char]]
