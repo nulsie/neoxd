@@ -8,3 +8,6 @@ neoxd
 
 .DS_Store
 *.swp
+dist/
+
+/home/nulsie/neoxd/assets

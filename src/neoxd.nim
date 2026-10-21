@@ -3,7 +3,8 @@ import strutils, math, terminal, parseopt, std/endians, std/memfiles, os, unicod
 when defined(posix):
   import posix
 
-const BlockChars = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+# (v1.1.0) change: horizontal sub-block characters (0/8 to 8/8 width) instead of the former vertical thing
+const HorizontalBlockChars = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"]
 
 # bind standard c tmpfile for safe anonymous buffers
 proc c_tmpfile(): File {.importc: "tmpfile", header: "<stdio.h>".}
@@ -205,9 +206,14 @@ proc getEntropyColor(entropy: float): ForegroundColor =
   elif entropy < 7.2: return fgYellow 
   else: return fgRed                
 
-proc getEntropyBar(ratio: float): string =
-  let idx = clamp(int(ratio * float(BlockChars.high)), 0, BlockChars.high)
-  return BlockChars[idx]
+proc getEntropyBar(ratio: float, width: int = 8): string =
+  let totalSteps = float(width * 8)
+  let filledSteps = clamp(ratio * totalSteps, 0.0, totalSteps)
+  result = newStringOfCap(width)
+  for i in 0 ..< width:
+    let cellSteps = clamp(filledSteps - float(i * 8), 0.0, 8.0)
+    let idx = int(round(cellSteps))
+    result.add(HorizontalBlockChars[idx])
 
 proc printProgressBar(outStream: File, label: string, count, total: int, color: ForegroundColor, useColor: bool) =
   let pct = if total == 0: 0.0 else: float(count) / float(total) * 100.0
@@ -553,7 +559,7 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
     lineBuf.add(" | H: ")
     lineBuf.addEntropyStr(chunkEntropy)
     lineBuf.add(" [")
-    for _ in 0 ..< 8: lineBuf.add(bar)
+    lineBuf.add(bar) # (v1.1.0): adds the full horizontal bar directly
     lineBuf.add(']')
     if Reset.len > 0: lineBuf.add(Reset)
         
@@ -694,7 +700,7 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
     lineBuf.add(" | H: ")
     lineBuf.addEntropyStr(chunkEntropy)
     lineBuf.add(" [")
-    for _ in 0 ..< 8: lineBuf.add(bar)
+    lineBuf.add(bar) # (v1.1.0): same thing as the thing in processStream
     lineBuf.add(']')
     if Reset.len > 0: lineBuf.add(Reset)
         
