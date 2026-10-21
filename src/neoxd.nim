@@ -358,23 +358,100 @@ proc logDebug(msg: string, debugMode: bool) =
   if debugMode:
     stderr.writeLine("[DEBUG] " & msg)
 
-proc getReadOnlyRegions(f: File, debugMode: bool = false): seq[FileRegion] =
+# v1.1.0 add and a bitta change: added support for PE and Mach-O header bytes, i had to change the getReadOnlyRegions for this
+# as i have turned the single method into separate methods for ELF, Mach-O and PE, stil the former method exists to gue them together
+proc getPEReadOnlyRegions(f: File, startPos: int64, fileSize: int64, debugMode: bool): seq[FileRegion] =
   var regions: seq[FileRegion] = @[]
-  var startPos: int64
-  
   try:
-    startPos = f.getFilePos()
-    let fileSize = f.getFileSize()
+    f.setFilePos(startPos + 0x3C)
+    let peOffset = readU32(f, false) # pe headers are always little-endian
+    if int64(peOffset) + 4 > fileSize: return regions
 
-    if fileSize < 64: return regions
+    f.setFilePos(startPos + int64(peOffset))
+    var peSig: array[4, byte]
+    if f.readBuffer(addr peSig[0], 4) != 4 or peSig != [byte 0x50, 0x45, 0x00, 0x00]: 
+      return regions
 
+    # number of sections is at peoffset + 6
+    f.setFilePos(startPos + int64(peOffset) + 6)
+    let numSections = readU16(f, false)
+
+    # size of optional header is at peoffset + 20
+    f.setFilePos(startPos + int64(peOffset) + 20)
+    let optHeaderSize = readU16(f, false)
+
+    # section headers follow: pe signature (4) + coff header (20) + optional header size
+    let sectionsOffset = int64(peOffset) + 4 + 20 + int64(optHeaderSize)
+
+    for i in 0 ..< int(numSections):
+      let secOffset = sectionsOffset + (i * 40)
+      if secOffset + 40 > fileSize: break
+
+      f.setFilePos(startPos + secOffset + 16)
+      let sizeOfRawData = readU32(f, false)
+      f.setFilePos(startPos + secOffset + 20)
+      let pointerToRawData = readU32(f, false)
+      f.setFilePos(startPos + secOffset + 36) # characteristics flags
+      let characteristics = readU32(f, false)
+
+      # IMAGE_SCN_MEM_WRITE = 0x80000000 if write bit is not set, it's read-only.
+      let isWritable = (characteristics and 0x80000000'u32) != 0
+      if not isWritable and sizeOfRawData > 0:
+        let endOffset = int64(pointerToRawData) + int64(sizeOfRawData)
+        if endOffset <= fileSize and int64(pointerToRawData) >= 0:
+          regions.add((int(pointerToRawData), int(endOffset)))
+  except CatchableError as e:
+    logDebug("PE Section Parsing Exception: " & e.msg, debugMode)
+  return regions
+
+proc getMachOReadOnlyRegions(f: File, startPos: int64, fileSize: int64, magic: uint32, debugMode: bool): seq[FileRegion] =
+  var regions: seq[FileRegion] = @[]
+  try:
+    let isBigEndian = (magic == 0xFEEDFACE'u32 or magic == 0xFEEDFACF'u32)
+    let is64Bit = (magic == 0xFEEDFACF'u32 or magic == 0xCFFAEDFE'u32)
+
+    f.setFilePos(startPos + 16)
+    let ncmds = readU32(f, isBigEndian)
+
+    var cmdPos = startPos + (if is64Bit: 32 else: 28)
+    for i in 0 ..< int(ncmds):
+      if cmdPos + 8 > startPos + fileSize: break
+      f.setFilePos(cmdPos)
+      let cmd = readU32(f, isBigEndian)
+      let cmdsize = readU32(f, isBigEndian)
+      if cmdsize < 8 or cmdPos + int64(cmdsize) > startPos + fileSize: break
+
+      # LC_SEGMENT (0x1) or LC_SEGMENT_64 (0x19)
+      if cmd == 0x1 or cmd == 0x19:
+        let initprotOffset = cmdPos + 24 + (if is64Bit: 32 else: 16) + 4
+        f.setFilePos(initprotOffset)
+        let initprot = readU32(f, isBigEndian)
+
+        # VM_PROT_WRITE = 0x2
+        let isWritable = (initprot and 0x2) != 0
+        if not isWritable:
+          let fileoffOffset = cmdPos + 24 + (if is64Bit: 16 else: 8)
+          f.setFilePos(fileoffOffset)
+          let fileoff = if is64Bit: readU64(f, isBigEndian) else: uint64(readU32(f, isBigEndian))
+          let segSize = if is64Bit: readU64(f, isBigEndian) else: uint64(readU32(f, isBigEndian))
+
+          if segSize > 0 and int64(fileoff) + int64(segSize) <= fileSize:
+            regions.add((int(fileoff), int(fileoff + segSize)))
+
+      cmdPos += int64(cmdsize)
+  except CatchableError as e:
+    logDebug("Mach-O Parsing Exception: " & e.msg, debugMode)
+  return regions
+
+proc getELFReadOnlyRegions(f: File, startPos: int64, fileSize: int64, debugMode: bool): seq[FileRegion] =
+  var regions: seq[FileRegion] = @[]
+  try:
     var e_ident: array[16, byte]
+    f.setFilePos(startPos)
     if f.readBuffer(addr e_ident[0], 16) != 16: return regions
-    if e_ident[0..3] != [byte 0x7F, 0x45, 0x4C, 0x46]: return regions
 
     let eiClass = e_ident[4]
     let eiData = e_ident[5]
-
     if eiClass notin {byte 1, byte 2} or eiData notin {byte 1, byte 2}: return regions
 
     let is64Bit = (eiClass == 2)
@@ -400,7 +477,6 @@ proc getReadOnlyRegions(f: File, debugMode: bool = false): seq[FileRegion] =
     if int(e_shentsize) < expectedEntSize or e_shoff == 0: return regions
 
     var actualShNum = int(e_shnum)
-
     if e_shnum == 0 or e_shnum == 0xFFFF:
       if int64(e_shoff) + int64(e_shentsize) <= fileSize:
         if not is64Bit:
@@ -413,7 +489,7 @@ proc getReadOnlyRegions(f: File, debugMode: bool = false): seq[FileRegion] =
     for i in 0 ..< actualShNum:
       let entryOffset = int64(e_shoff) + (i * int64(e_shentsize))
       if entryOffset < 0 or entryOffset + int64(e_shentsize) > fileSize: continue
-        
+
       var sh_type, sh_flags, sh_offset, sh_size: uint64
       if not is64Bit:
         f.setFilePos(startPos + entryOffset + 4)
@@ -427,20 +503,47 @@ proc getReadOnlyRegions(f: File, debugMode: bool = false): seq[FileRegion] =
         sh_type = uint64(readU32(f, isBigEndian))
         sh_flags = readU64(f, isBigEndian)
         f.setFilePos(f.getFilePos() + 8)
-        sh_offset = readU64(f, isBigEndian)
+        sh_offset = uint64(readU64(f, isBigEndian))
         sh_size = readU64(f, isBigEndian)
-      
+
       if sh_type != 0 and (sh_flags and 0x5) == 0:
         let endOffset = int64(sh_offset) + int64(sh_size)
         if endOffset <= fileSize and endOffset > 0 and int64(sh_offset) >= 0:
           regions.add((int(sh_offset), int(endOffset)))
-            
   except CatchableError as e:
     logDebug("ELF Section Parsing Exception: " & e.msg, debugMode)
+  return regions
+
+proc getReadOnlyRegions(f: File, debugMode: bool = false): seq[FileRegion] =
+  var startPos: int64 = 0
+  try:
+    startPos = f.getFilePos()
+    let fileSize = f.getFileSize()
+    if fileSize < 64: return @[]
+
+    var magicHeader: array[4, byte]
+    if f.readBuffer(addr magicHeader[0], 4) != 4: return @[]
+
+    # 1. check ELF Magic (\x7FELF)
+    if magicHeader[0..3] == [byte 0x7F, 0x45, 0x4C, 0x46]:
+      return getELFReadOnlyRegions(f, startPos, fileSize, debugMode)
+
+    # 2. check PE / DOS Magic (MZ -> 0x4D 0x5A)
+    if magicHeader[0..1] == [byte 0x4D, 0x5A]:
+      return getPEReadOnlyRegions(f, startPos, fileSize, debugMode)
+
+    # 3. check Mach-O magics using explicit comparisons instead of a set literal
+    let machMagic = cast[ptr uint32](addr magicHeader[0])[]
+    if machMagic == 0xFEEDFACE'u32 or machMagic == 0xCEFAEDFE'u32 or 
+       machMagic == 0xFEEDFACF'u32 or machMagic == 0xCFFAEDFE'u32:
+      return getMachOReadOnlyRegions(f, startPos, fileSize, machMagic, debugMode)
+
+  except CatchableError as e:
+    logDebug("Header Dispatch Exception: " & e.msg, debugMode)
   finally:
     try: f.setFilePos(startPos) except: discard
-    
-  return regions
+
+  return @[]
 
 proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions: seq[FileRegion], magicList: openArray[tuple[sig: string, label: string]], filter: MagicFilter, outStream: File = stdout, useColor: bool = true, seekPos: int = 0, readLength: int = 0, cols: int = 16, windowSize: int = 256) =
   # initialize the buffered writer and ensure it flushes when the function returns
