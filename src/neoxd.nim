@@ -136,6 +136,9 @@ proc getEntropy(e: RollingEntropy): float64 {.inline.} =
 
 type MagicFilter = array[256, bool]
 
+# now changed to here so processSummary can see it
+type FileRegion = tuple[startPos, endPos: int]
+
 proc initMagicFilter(magicList: openArray[tuple[sig: string, label: string]]): MagicFilter =
   for magic in magicList:
     if magic.sig.len > 0:
@@ -261,7 +264,8 @@ proc loadCustomMagic(filename: string, dest: var seq[tuple[sig: string, label: s
       except ValueError:
         stderr.writeLine("Warning: Invalid hex in custom magic file (skipping): " & hexStr)
 
-proc processSummary(f: File, magicList: openArray[tuple[sig: string, label: string]], filter: MagicFilter, outStream: File = stdout, useColor: bool = true, cols: int = 16) =
+# (v1.1.0) fix: fixed processSummary to prevent false +ves in detecting embedded file signs, processStream had alr prevented dis by querying getReadOnlyRegions to identify executable code and data sections and skipping magic detection inside them, processSummary wasn't using those ignored regions
+proc processSummary(f: File, ignoredRegions: openArray[FileRegion], magicList: openArray[tuple[sig: string, label: string]], filter: MagicFilter, outStream: File = stdout, useColor: bool = true, cols: int = 16) =
   var buffer = newSeq[byte](cols)
   var totalBytes = 0
   var totalBlocks = 0
@@ -273,9 +277,16 @@ proc processSummary(f: File, magicList: openArray[tuple[sig: string, label: stri
     let bytesRead = f.readBuffer(addr buffer[0], cols)
     if bytesRead <= 0: break
   
-    let (magic, magicOffset) = detectMagic(buffer, bytesRead, magicList, filter)
-    if magic != "": 
-      foundSignatures.add(magic & " at 0x" & toHex(totalBytes + magicOffset, 8))
+    var skipMagic = false
+    for reg in ignoredRegions:
+      if totalBytes >= reg.startPos and totalBytes < reg.endPos:
+        skipMagic = true
+        break
+
+    if not skipMagic:
+      let (magic, magicOffset) = detectMagic(buffer, bytesRead, magicList, filter)
+      if magic != "": 
+        foundSignatures.add(magic & " at 0x" & toHex(totalBytes + magicOffset, 8))
   
     for i in 0 ..< bytesRead:
        globalCounts[buffer[i]] += 1
@@ -333,8 +344,6 @@ proc getAnsiColor(entropy: float, useColor: bool): string =
   elif entropy < 5.5: return "\e[32m"   
   elif entropy < 7.2: return "\e[33m"   
   else: return "\e[31m"
-
-type FileRegion = tuple[startPos, endPos: int]
 
 proc readU16(f: File, isBigEndian: bool): uint16 =
   var raw: uint16
@@ -1134,7 +1143,7 @@ proc main() =
     if restoreMode: restoreDump(stdin, outStream, plainMode, useColor, activeMagicHeaders, magicFilter, cols)
     elif reverseMode and plainMode: reversePlainHexDump(stdin, outStream)
     elif reverseMode: reverseHexDump(stdin, outStream, cols)
-    elif summaryMode: processSummary(stdin, activeMagicHeaders, magicFilter, outStream, useColor, cols)
+    elif summaryMode: processSummary(stdin, @[], activeMagicHeaders, magicFilter, outStream, useColor, cols)
     elif plainMode: processPlainStream(stdin, outStream, cols)
     else: processStream(stdin, minEntropy, maxEntropy, @[], activeMagicHeaders, magicFilter, outStream, useColor, seekPos, readLength, cols, windowSize)
   else:
@@ -1150,12 +1159,12 @@ proc main() =
       let ignoredRegions = getReadOnlyRegions(f, debugMode)
       close(f) 
       inputIsOpen = false 
-              
+                  
       if summaryMode: 
         var tempF: File
-        discard open(tempF, targetFile)
-        processSummary(tempF, activeMagicHeaders, magicFilter, outStream, useColor, cols)
-        close(tempF)
+        if open(tempF, targetFile):
+          processSummary(tempF, ignoredRegions, activeMagicHeaders, magicFilter, outStream, useColor, cols)  # <--- new line with ignoredRegions(v1.1.0)
+          close(tempF)
       else:
         let isRegularFile = try:
           let k = getFileInfo(targetFile).kind
