@@ -205,11 +205,15 @@ func calculateEntropy(window: openArray[byte]): float =
       entropy -= p * log2(p)
   return entropy
 
+# (v1.1.0) fix: enhanced this procedure to correctly parses negative numbers and neg hex strings for the reversal/neg seeking support
 proc parseOffset(s: string): int =
-  if s.toLowerAscii().startsWith("0x"):
-    return parseHexInt(s[2..^1])
+  let clean = s.strip()
+  if clean.startsWith("-"):
+    return -parseOffset(clean[1..^1])
+  if clean.toLowerAscii().startsWith("0x"):
+    return parseHexInt(clean[2..^1])
   else:
-    return parseInt(s)
+    return parseInt(clean)
 
 proc getEntropyColor(entropy: float): ForegroundColor =
   if entropy < 2.0: return fgCyan     
@@ -1111,11 +1115,22 @@ proc main() =
   
   var f: File
   var inputIsOpen = false
-  
+    
   if targetFile != "" and targetFile != "-":
     if not open(f, targetFile): 
       quit("Error: Cannot open target file: " & targetFile)
     inputIsOpen = true
+
+    # (v1.1.0) fix: support for negative/reverse seeking
+    # resolve negative seeks relative to the file size
+    if seekPos < 0:
+      let fileSize = f.getFileSize()
+      seekPos = int(fileSize) + seekPos
+      if seekPos < 0:
+        seekPos = 0 # clamp to start of file if negative offset exceeds file size
+  else:
+    if seekPos < 0:
+      quit("Error: Negative seek (-s) is not supported for stdin or non-seekable streams.")
       
   defer: 
     if inputIsOpen: close(f)
