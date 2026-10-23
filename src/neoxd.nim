@@ -1022,6 +1022,7 @@ Examples:
 Note:
   * Even if you try to filter the score of the hex dump, the first line of the filtered dump will always be the first line of the actual dump regardless of it's own score(a file type flagging quirk)
   * By default, PRUFER validation prevents catastrophic file truncation from argument swapping (-o target) and suggests typo corrections. Use --nop to bypass.
+  * If you're doing negative/reverse seeking(like -512), be sure to add an equal sign(=).(eg: neoxd -k=-512)
 """
 
 proc main() =
