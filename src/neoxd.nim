@@ -168,10 +168,14 @@ proc initFastWriter*(stream: File): FastWriter =
   result.stream = stream
   result.pos = 0
 
+# updated these two procedures for the new unified broken pipe checking(v1.1.0)
 proc flush*(w: var FastWriter) =
   if w.pos > 0:
-    if w.stream.writeBuffer(addr w.buf[0], w.pos) != w.pos:
-      raise newException(IOError, "Failed to write buffer to stream")
+    try:
+      if w.stream.writeBuffer(addr w.buf[0], w.pos) != w.pos:
+        raise newException(IOError, "Failed to write buffer to stream")
+    except IOError as e:
+      handleIoError(e, "Failed to flush final buffer")
     w.pos = 0
 
 proc writeStr*(w: var FastWriter, s: string) {.inline.} =
@@ -183,12 +187,27 @@ proc writeStr*(w: var FastWriter, s: string) {.inline.} =
   
   # if the string itself is larger than the entire buffer (rare, but safe) write directly
   if s.len > w.buf.len:
-    if w.stream.writeBuffer(unsafeAddr s[0], s.len) != s.len:
-      raise newException(IOError, "Failed to write large string to stream")
+    try:
+      if w.stream.writeBuffer(unsafeAddr s[0], s.len) != s.len:
+        raise newException(IOError, "Failed to write large string to stream")
+    except IOError as e:
+      handleIoError(e, "Failed to write large string")
   else:
     # otherwise copy it into the buffer fast
     copyMem(addr w.buf[w.pos], unsafeAddr s[0], s.len)
     w.pos += s.len
+
+# (v1.1.0) change: add unified procedures for handling all broken pipe handling across all subroutines instead of the former method of each subroutine having its own checks
+proc handleIoError(e: IOError, contextMsg: string = "Output stream write failed") =
+  if "Broken pipe" notin e.msg and "errno: 32" notin e.msg and "broken pipe" notin e.msg:
+    stderr.writeLine("neoxd: error: " & contextMsg & " - " & e.msg)
+  quit(1)
+
+proc safeWrite(stream: File, s: string, contextMsg: string = "Output stream write failed") {.inline.} =
+  try:
+    stream.write(s)
+  except IOError as e:
+    handleIoError(e, contextMsg)
 
 proc printVersion() =
   echo """neoxd by nulsie under GNU GPL v3"""
@@ -240,10 +259,13 @@ proc printProgressBar(outStream: File, label: string, count, total: int, color: 
 
   if useColor and outStream == stdout:
     stdout.setForegroundColor(color)
-    stdout.write(line)
+    try:
+      stdout.write(line)
+    except IOError as e:
+      handleIoError(e, "Progress bar write failed")
     stdout.resetAttributes()
   else:
-    outStream.write(line)
+    safeWrite(outStream, line, "Progress bar write failed")
 
 proc loadCustomMagic(filename: string, dest: var seq[tuple[sig: string, label: string]]) =
   if not fileExists(filename):
@@ -308,39 +330,39 @@ proc processSummary(f: File, ignoredRegions: openArray[FileRegion], magicList: o
     else: blocksHigh += 1
 
   if totalBytes == 0: quit("File is empty.")
-
+  
   var globalEntropy = 0.0
   for c in globalCounts:
     if c > 0:
       let p = float(c) / float(totalBytes)
       globalEntropy -= p * log2(p)
-
+  
   var buckets: array[16, int]
   for i in 0 .. 255:
     buckets[i div 16] += globalCounts[i]
-
-  outStream.write("\n=======================================================================\n")
-  outStream.write(" FILE SUMMARY REPORT\n")
-  outStream.write("=======================================================================\n")
-  outStream.write(" Total Size     : " & $totalBytes & " bytes\n")
-  outStream.write(" Overall Entropy: " & formatFloat(globalEntropy, ffDecimal, 3) & " / 8.000\n")
   
+  safeWrite(outStream, "\n=======================================================================\n", "Summary report write failed")
+  safeWrite(outStream, " FILE SUMMARY REPORT\n", "Summary report write failed")
+  safeWrite(outStream, "=======================================================================\n", "Summary report write failed")
+  safeWrite(outStream, " Total Size     : " & $totalBytes & " bytes\n", "Summary report write failed")
+  safeWrite(outStream, " Overall Entropy: " & formatFloat(globalEntropy, ffDecimal, 3) & " / 8.000\n", "Summary report write failed")
+    
   if foundSignatures.len > 0:
-    outStream.write("\n Embedded Files Detected:\n")
-    for sig in foundSignatures: outStream.write("   -> " & sig & "\n")
-  outStream.write("=======================================================================\n\n")
-
-  outStream.write("--- Block Distribution (Structural Density) ---\n")
+    safeWrite(outStream, "\n Embedded Files Detected:\n", "Summary report write failed")
+    for sig in foundSignatures: safeWrite(outStream, "   -> " & sig & "\n", "Summary report write failed")
+  safeWrite(outStream, "=======================================================================\n\n", "Summary report write failed")
+  
+  safeWrite(outStream, "--- Block Distribution (Structural Density) ---\n", "Summary report write failed")
   printProgressBar(outStream, "Padding/Nulls", blocksLow, totalBlocks, fgCyan, useColor)
   printProgressBar(outStream, "Text/Sparse", blocksMedLow, totalBlocks, fgGreen, useColor)
   printProgressBar(outStream, "Code/Data", blocksMedHigh, totalBlocks, fgYellow, useColor)
   printProgressBar(outStream, "Packed/Crypto", blocksHigh, totalBlocks, fgRed, useColor)
-  
-  outStream.write("\n--- Global Byte Frequency Histogram ---\n")
+    
+  safeWrite(outStream, "\n--- Global Byte Frequency Histogram ---\n", "Summary report write failed")
   for i in 0 ..< 16:
     let label = "0x" & toHex(i * 16, 2) & " - 0x" & toHex((i * 16) + 15, 2)
     printProgressBar(outStream, label, buckets[i], totalBytes, fgWhite, useColor)
-  outStream.write("\n")
+  safeWrite(outStream, "\n", "Summary report write failed")
 
 proc getAnsiColor(entropy: float, useColor: bool): string =
   if not useColor: return ""
@@ -562,12 +584,10 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
   # initialize the buffered writer and ensure it flushes when the function returns
   var writer = initFastWriter(outStream)
   defer: 
-    try: 
-      writer.flush() 
-    except IOError as e: 
-      if "Broken pipe" notin e.msg and "errno: 32" notin e.msg and "broken pipe" notin e.msg:
-        stderr.writeLine("neoxd: error: Failed to flush final buffer - " & e.msg)
-      quit(1)
+    try:
+      writer.writeStr(lineBuf)
+    except IOError as e:
+      handleIoError(e, "Output stream write failed")
 
   if seekPos > 0:
     try:
@@ -699,9 +719,7 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
     try:
       writer.writeStr(lineBuf)
     except IOError as e:
-      if "Broken pipe" notin e.msg and "errno: 32" notin e.msg and "broken pipe" notin e.msg:
-        stderr.writeLine("neoxd: error: Output stream write failed - " & e.msg)
-      quit(1)
+      handleIoError(e, "Output stream write failed")
         
     prevBuffer = buffer
     prevLen = bytesRead
@@ -840,9 +858,7 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
     try:
       outStream.write(lineBuf)
     except IOError as e:
-      if "Broken pipe" notin e.msg and "errno: 32" notin e.msg and "broken pipe" notin e.msg:
-        stderr.writeLine("neoxd: error: Output stream write failed - " & e.msg)
-      quit(1)
+      handleIoError(e, "Output stream write failed")
         
     for i in 0 ..< bytesRead: prevBuffer[i] = data[offset + i]
     prevLen = bytesRead
@@ -850,8 +866,11 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
 
 proc writeByteChecked(outStream: File, b: byte) {.inline.} =
   var buf = [b]
-  if outStream.writeBuffer(addr buf[0], 1) != 1:
-    raise newException(IOError, "Failed to write byte to output stream (disk full or broken pipe)")
+  try:
+    if outStream.writeBuffer(addr buf[0], 1) != 1:
+      raise newException(IOError, "Failed to write byte to output stream (disk full or broken pipe)")
+  except IOError as e:
+    handleIoError(e, "Failed to write byte")
 
 proc reverseHexDump(inStream, outStream: File, cols: int = 16) =
   var line: string
@@ -899,7 +918,7 @@ proc processPlainStream(f: File, outStream: File, cols: int = 30) =
     var hexStr = ""
     for i in 0 ..< bytesRead:
       hexStr.add(toHex(buffer[i], 2).toLowerAscii())
-    outStream.write(hexStr & "\n")
+    safeWrite(outStream, hexStr & "\n", "Plain stream write failed")
 
 proc reversePlainHexDump(inStream, outStream: File) =
   var hexBuffer = ""
