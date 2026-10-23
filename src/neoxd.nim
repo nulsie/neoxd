@@ -159,6 +159,18 @@ func detectMagic(buffer: openArray[byte], bytesRead: int, magicList: openArray[t
         if match: return (magic.label, start)
   return ("", 0)
 
+# (v1.1.0) change: add unified procedures for handling all broken pipe handling across all subroutines instead of the former method of each subroutine having its own checks
+proc handleIoError(e: ref IOError, contextMsg: string = "Output stream write failed") =
+  if "Broken pipe" notin e.msg and "errno: 32" notin e.msg and "broken pipe" notin e.msg:
+    stderr.writeLine("neoxd: error: " & contextMsg & " - " & e.msg)
+  quit(1)
+
+proc safeWrite(stream: File, s: string, contextMsg: string = "Output stream write failed") {.inline.} =
+  try:
+    stream.write(s)
+  except IOError as e:
+    handleIoError(e, contextMsg)
+
 type FastWriter* = object
   stream: File
   buf: array[65536, char]
@@ -196,18 +208,6 @@ proc writeStr*(w: var FastWriter, s: string) {.inline.} =
     # otherwise copy it into the buffer fast
     copyMem(addr w.buf[w.pos], unsafeAddr s[0], s.len)
     w.pos += s.len
-
-# (v1.1.0) change: add unified procedures for handling all broken pipe handling across all subroutines instead of the former method of each subroutine having its own checks
-proc handleIoError(e: IOError, contextMsg: string = "Output stream write failed") =
-  if "Broken pipe" notin e.msg and "errno: 32" notin e.msg and "broken pipe" notin e.msg:
-    stderr.writeLine("neoxd: error: " & contextMsg & " - " & e.msg)
-  quit(1)
-
-proc safeWrite(stream: File, s: string, contextMsg: string = "Output stream write failed") {.inline.} =
-  try:
-    stream.write(s)
-  except IOError as e:
-    handleIoError(e, contextMsg)
 
 proc printVersion() =
   echo """neoxd by nulsie under GNU GPL v3"""
@@ -585,9 +585,9 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
   var writer = initFastWriter(outStream)
   defer: 
     try:
-      writer.writeStr(lineBuf)
-    except IOError as e:
-      handleIoError(e, "Output stream write failed")
+      writer.flush() 
+    except IOError as e: 
+      handleIoError(e, "Failed to flush final buffer")
 
   if seekPos > 0:
     try:
