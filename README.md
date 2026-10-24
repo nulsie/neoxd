@@ -2,7 +2,7 @@ neoxd - hex dumper and analyzer
 
 ---
 
-![A preview](https://iili.io/nemPLnn.md.jpg)
+![preview](https://iili.io/nemPLnn.md.jpg)
 
 neoxd is a to-date(modern), high-performance, feature-full hex dumper and binary analysis UNIX(i stress that because this is surely not built for Windows as it specifically uses UNIX-specific modules) utility written in Nim, engineered as a modern direct replacement for traditional UNIX tools such as `xxd` and `hexdump` and also most hex dumpers which claims to be replacemnets for the traditional ones.
 
@@ -23,7 +23,7 @@ Emits continuous lower-case hexadecimal output without offsets, spacing, ASCII r
 
 * Summary Mode (`-s`, `--summary`)
 Returns a quite insightful summary of the dump which says global file size, overall dataset entropy ($0.000$ to $8.000$), embedded binary header signature locations, a 4-category structural density distribution, and a 16-bucket byte frequency histogram.
-![A pictoral representation for summary feature](https://iili.io/nemPPjt.md.jpg)
+![pictoral representation for summary feature](https://iili.io/nemPPjt.md.jpg)
 
 * Reverse Binary Conversion Mode (`-r`, `--reverse`)
 Reconstructs a raw binary file from a formatted text hex dump or a plain hex stream. In standard reverse mode, neoxd scans lines for the colon delimiter (:), isolates hex digits prior to the pipe character (|), and reassembles raw byte sequences. In plain mode (-r -p), it strips all non-hexadecimal characters and converts pairs of hex characters directly into bytes.
