@@ -70,6 +70,7 @@ const MagicHeaders = [
 ]
 
 var HexLUT: array[256, array[2, char]]
+var searchBytes: seq[byte] = @[]
 
 proc initHexLUT() =
   const hexChars = "0123456789ABCDEF"
@@ -233,6 +234,30 @@ proc parseOffset(s: string): int =
     return parseHexInt(clean[2..^1])
   else:
     return parseInt(clean)
+
+# (v1.1.0) add: added a search and highlight feature which that takes a hex string or text string  which automatically filters out non-matching blocks or highlights matching lines in color
+proc parseSearchBytes(s: string): seq[byte] =
+  result = @[]
+  let clean = s.strip()
+  if clean.len == 0: return
+  
+  # check if string is valid hex (even length and all hex digits)
+  var isHex = clean.len mod 2 == 0
+  if isHex:
+    for c in clean:
+      if c notin HexDigits:
+        isHex = false
+        break
+  
+  if isHex:
+    var i = 0
+    while i + 1 < clean.len:
+      result.add(parseHexInt(clean[i .. i+1]).byte)
+      i += 2
+  else:
+    # treat as plain text ascii bytes
+    for c in clean:
+      result.add(byte(c))
 
 proc getEntropyColor(entropy: float): ForegroundColor =
   if entropy < 2.0: return fgCyan     
@@ -611,6 +636,7 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
 
   let Reset = if useColor: "\e[0m" else: ""
   let BrightMagenta = if useColor: "\e[95m" else: ""
+  let HighlightCode = if useColor: "\e[43;30m" else: ""
 
   while true:
     var toRead = cols
@@ -628,6 +654,25 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
     let rawChunkEntropy = entropyCalc.getEntropy()
     let chunkEntropy = round(rawChunkEntropy * 100.0) / 100.0
     let entropyRatio = chunkEntropy / 8.0
+
+    # search pattern matching across prevBuffer + buffer
+    var matchedRanges: seq[tuple[startOffset, endOffset: int]] = @[]
+    if searchBytes.len > 0:
+      var combined = newSeq[byte](prevLen + bytesRead)
+      for i in 0 ..< prevLen: combined[i] = prevBuffer[i]
+      for i in 0 ..< bytesRead: combined[prevLen + i] = buffer[i]
+          
+      let combinedLen = combined.len
+      if combinedLen >= searchBytes.len:
+        for start in 0 .. combinedLen - searchBytes.len:
+          var match = true
+          for i in 0 ..< searchBytes.len:
+            if combined[start + i] != searchBytes[i]:
+              match = false
+              break
+          if match:
+            let actualStart = offset - prevLen + start
+            matchedRanges.add((actualStart, actualStart + searchBytes.len))
 
     var skipMagic = false
     for reg in ignoredRegions:
@@ -682,21 +727,43 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
     lineBuf.addHex8(offset)
     lineBuf.add(": ")
 
+    # hex column with highlighting
     for i in 0 ..< cols:
       if i < bytesRead:
         let b = buffer[i]
+        let absByteOffset = offset + i
+        var isHighlighted = false
+        for r in matchedRanges:
+          if absByteOffset >= r.startOffset and absByteOffset < r.endOffset:
+            isHighlighted = true
+            break
+            
+        if isHighlighted and HighlightCode.len > 0: lineBuf.add(HighlightCode)
         lineBuf.add(HexLUT[b][0])
         lineBuf.add(HexLUT[b][1])
+        if isHighlighted and HighlightCode.len > 0:
+          if colorCode.len > 0: lineBuf.add(colorCode) else: lineBuf.add(Reset)
         lineBuf.add(' ')
       else:
         lineBuf.add("   ")
-      if i == splitIndex and cols > 1: lineBuf.add(' ') 
+      if i == splitIndex and cols > 1: lineBuf.add(' ')
 
+    # ascii Column with Highlighting
     for i in 0 ..< cols:
       if i < bytesRead:
         let c = char(buffer[i])
+        let absByteOffset = offset + i
+        var isHighlighted = false
+        for r in matchedRanges:
+          if absByteOffset >= r.startOffset and absByteOffset < r.endOffset:
+            isHighlighted = true
+            break
+    
+        if isHighlighted and HighlightCode.len > 0: lineBuf.add(HighlightCode)
         if c in ' ' .. '~': lineBuf.add(c)
         else: lineBuf.add('.')
+        if isHighlighted and HighlightCode.len > 0:
+          if colorCode.len > 0: lineBuf.add(colorCode) else: lineBuf.add(Reset)
       else:
         lineBuf.add(' ')
 
@@ -758,6 +825,7 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
 
   let Reset = if useColor: "\e[0m" else: ""
   let BrightMagenta = if useColor: "\e[95m" else: ""
+  let HighlightCode = if useColor: "\e[43;30m" else: ""
 
   while offset < totalBytes:
     let bytesRead = min(cols, totalBytes - offset)
@@ -768,6 +836,25 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
     let rawChunkEntropy = entropyCalc.getEntropy()
     let chunkEntropy = round(rawChunkEntropy * 100.0) / 100.0
     let entropyRatio = chunkEntropy / 8.0
+
+    # search pattern matching across prevBuffer + buffer
+    var matchedRanges: seq[tuple[startOffset, endOffset: int]] = @[]
+    if searchBytes.len > 0:
+      var combined = newSeq[byte](prevLen + bytesRead)
+      for i in 0 ..< prevLen: combined[i] = prevBuffer[i]
+      for i in 0 ..< bytesRead: combined[prevLen + i] = data[offset + i]
+          
+      let combinedLen = combined.len
+      if combinedLen >= searchBytes.len:
+        for start in 0 .. combinedLen - searchBytes.len:
+          var match = true
+          for i in 0 ..< searchBytes.len:
+            if combined[start + i] != searchBytes[i]:
+              match = false
+              break
+          if match:
+            let actualStart = offset - prevLen + start
+            matchedRanges.add((actualStart, actualStart + searchBytes.len))
     
     var skipMagic = false
     for reg in ignoredRegions:
@@ -815,27 +902,49 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
     let colorCode = getAnsiColor(chunkEntropy, useColor)
     let bar = getEntropyBar(entropyRatio)
     let splitIndex = (cols div 2) - 1
-
+    
     lineBuf.setLen(0)
     if colorCode.len > 0: lineBuf.add(colorCode)
     lineBuf.addHex8(offset)
     lineBuf.add(": ")
-
+    
+    # hex column with highlighting for mmap
     for i in 0 ..< cols:
       if i < bytesRead:
         let b = data[offset + i]
+        let absByteOffset = offset + i
+        var isHighlighted = false
+        for r in matchedRanges:
+          if absByteOffset >= r.startOffset and absByteOffset < r.endOffset:
+            isHighlighted = true
+            break
+                
+        if isHighlighted and HighlightCode.len > 0: lineBuf.add(HighlightCode)
         lineBuf.add(HexLUT[b][0])
         lineBuf.add(HexLUT[b][1])
+        if isHighlighted and HighlightCode.len > 0:
+          if colorCode.len > 0: lineBuf.add(colorCode) else: lineBuf.add(Reset)
         lineBuf.add(' ')
       else:
         lineBuf.add("   ")
-      if i == splitIndex and cols > 1: lineBuf.add(' ') 
-
+      if i == splitIndex and cols > 1: lineBuf.add(' ')
+    
+    # ascii column with highlighting for mmap
     for i in 0 ..< cols:
       if i < bytesRead:
         let c = char(data[offset + i])
+        let absByteOffset = offset + i
+        var isHighlighted = false
+        for r in matchedRanges:
+          if absByteOffset >= r.startOffset and absByteOffset < r.endOffset:
+            isHighlighted = true
+            break
+        
+        if isHighlighted and HighlightCode.len > 0: lineBuf.add(HighlightCode)
         if c in ' ' .. '~': lineBuf.add(c)
         else: lineBuf.add('.')
+        if isHighlighted and HighlightCode.len > 0:
+          if colorCode.len > 0: lineBuf.add(colorCode) else: lineBuf.add(Reset)
       else:
         lineBuf.add(' ')
 
@@ -1016,6 +1125,7 @@ Options:
   -c, --cols:INT               Number of octets per line (default: 16)
   -w, --window:INT             Set the sliding window size for entropy calculation (default: 256)
   -s, --summary                Scan file and output an overall distribution summary
+  -S, --search:PATTERN         Highlight occurrences of a hex pattern (e.g., 414243) or text # the argument for the search and highlight
   -o, --output:FILE            Save the hex dump output to a file for editing/analysis
   --no-color                   Disable ANSI colors (automatically set when saving to a file)
   --color                      Force ANSI colors even when writing to a file
@@ -1063,6 +1173,7 @@ proc main() =
   var customMagicFile = ""
   var debugMode = false
   var noPrufer = false
+  var searchPattern = ""
 
   var positionalArgs: seq[string] = @[]
   var p = initOptParser()
@@ -1086,6 +1197,8 @@ proc main() =
       of "r", "reverse": reverseMode = true
       of "R", "restore": restoreMode = true
       of "d", "debug": debugMode = true
+      of "S", "search":
+        searchPattern = p.requireVal(p.key)
       of "k", "seek": 
         seekPos = parseOffset(p.requireVal(p.key))
       of "n", "length": 
@@ -1114,6 +1227,8 @@ proc main() =
   
   if positionalArgs.len > 0:
     targetFile = positionalArgs[0]
+
+  searchBytes = parseSearchBytes(searchPattern)
   
   # run prufer validations (unless bypassed)
   if not noPrufer:
