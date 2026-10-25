@@ -71,6 +71,7 @@ const MagicHeaders = [
 
 var HexLUT: array[256, array[2, char]]
 var searchBytes: seq[byte] = @[]
+var groupSize: int = 8
 
 proc initHexLUT() =
   const hexChars = "0123456789ABCDEF"
@@ -746,6 +747,10 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
         lineBuf.add(' ')
       else:
         lineBuf.add("   ")
+
+      if (i + 1) mod groupSize == 0 and i < cols - 1:
+        lineBuf.add(' ')
+        
       if i == splitIndex and cols > 1: lineBuf.add(' ')
 
     # ascii Column with Highlighting
@@ -927,6 +932,11 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
         lineBuf.add(' ')
       else:
         lineBuf.add("   ")
+
+      # (v1.1.0) add: added a feature for devising the grouping of bytes in output
+      if (i + 1) mod groupSize == 0 and i < cols - 1:
+        lineBuf.add(' ')
+        
       if i == splitIndex and cols > 1: lineBuf.add(' ')
     
     # ascii column with highlighting for mmap
@@ -1135,6 +1145,7 @@ Options:
   -p, --plain                  Output in plain hex format (continuous hex with no offsets or formatting)
   -k, --seek:OFFSET            Start reading at a specific offset (e.g., 0x1000 or 4096)
   -n, --length:BYTES           Stop reading after BYTES are processed
+  -g, --group:INT              Number of bytes per hex group (default: 8, e.g., 2 for words, 4 for dwords)
   -r, --reverse                Reverses hex dumps to its original medium
   -R, --restore                Restore a malformed hex dump back into a clean formatted dump
   -m, --magic:FILE             Load additional magic headers from a CSV file (Format: HEX,Label)
@@ -1199,6 +1210,10 @@ proc main() =
       of "d", "debug": debugMode = true
       of "S", "search":
         searchPattern = p.requireVal(p.key)
+      of "g", "group":
+        groupSize = parseInt(p.requireVal(p.key))
+        if groupSize <= 0 or (cols mod groupSize != 0 and groupSize notin {1, 2, 4, 8, 16}):
+          quit("Error: Group size must be a valid divisor of column count (e.g., 1, 2, 4, 8).")
       of "k", "seek": 
         seekPos = parseOffset(p.requireVal(p.key))
       of "n", "length": 

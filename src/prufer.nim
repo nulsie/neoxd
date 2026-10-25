@@ -6,7 +6,7 @@ const ValidFlags = [
   "plain", "k", "seek", "n", "length", "r", "reverse", 
   "R", "restore", "m", "magic", "d", "debug", "h", "help", 
   "v", "version", "min", "min-entropy", "max", "max-entropy",
-  "nop", "no-prufer", "S", "search"
+  "nop", "no-prufer", "S", "search", "g", "group"
 ]
 
 const BinaryExts = [
