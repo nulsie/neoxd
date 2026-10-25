@@ -6,7 +6,7 @@ const ValidFlags = [
   "plain", "k", "seek", "n", "length", "r", "reverse", 
   "R", "restore", "m", "magic", "d", "debug", "h", "help", 
   "v", "version", "min", "min-entropy", "max", "max-entropy",
-  "nop", "no-prufer", "S", "search", "g", "group"
+  "nop", "no-prufer", "S", "search", "g", "group", "diff"
 ]
 
 const BinaryExts = [
@@ -51,10 +51,12 @@ proc requireVal*(p: var OptParser, currentFlag: string): string =
   
   return p.key
 
-proc checkSyntaxSanity*(positionalArgs: seq[string]) =
-  if positionalArgs.len > 1:
+# update this to accept isDiffMode
+proc checkSyntaxSanity*(positionalArgs: seq[string], isDiffMode: bool = false) =
+  let maxArgs = if isDiffMode: 2 else: 1
+  if positionalArgs.len > maxArgs:
     let msg = "neoxd: error: Too many positional arguments: " & positionalArgs.join(", ") & "\n" &
-              "Expected only one target file. This usually happens if you placed a flag in the wrong order."
+              "Expected at most " & $maxArgs & " target file(s). This usually happens if you placed a flag in the wrong order."
     stderr.writeLine(msg)
     quit(1)
 

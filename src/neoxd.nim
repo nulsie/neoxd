@@ -1124,6 +1124,99 @@ proc restoreDump(inStream, outStream: File, plainMode: bool, useColor: bool, mag
   else:
     processStream(tempFile, 0.0, 8.0, @[], magicList, filter, outStream, useColor, 0, 0, cols)
 
+# (v1.1.0) add: added a diff implementation which prints a diff-style hex view for two files where changed bytes are highlighted
+proc processDiff(filename1, filename2: string, outStream: File, cols: int = 16, useColor: bool = true) =
+  var f1, f2: File
+  if not open(f1, filename1): quit("Error: Cannot open first file: " & filename1)
+  if not open(f2, filename2): quit("Error: Cannot open second file: " & filename2)
+  defer: 
+    close(f1)
+    close(f2)
+
+  var buf1 = newSeq[byte](cols)
+  var buf2 = newSeq[byte](cols)
+  var offset = 0
+
+  let RedBg = if useColor: "\e[41;37m" else: ""
+  let GreenBg = if useColor: "\e[42;30m" else: ""
+  let Reset = if useColor: "\e[0m" else: ""
+  let Dim = if useColor: "\e[2m" else: ""
+
+  safeWrite(outStream, "Binary Diff Report:\n  [-] " & filename1 & "\n  [+] " & filename2 & "\n\n")
+
+  while true:
+    let n1 = f1.readBuffer(addr buf1[0], cols)
+    let n2 = f2.readBuffer(addr buf2[0], cols)
+    if n1 <= 0 and n2 <= 0: break
+
+    var differs = false
+    if n1 != n2: differs = true
+    else:
+      for i in 0 ..< n1:
+        if buf1[i] != buf2[i]:
+          differs = true
+          break
+
+    if differs:
+      var hex8Str = ""
+      hex8Str.addHex8(offset)
+
+      # print file 1 line (-)
+      var line1 = newStringOfCap(128)
+      line1.add(Dim & "- " & Reset)
+      line1.add(hex8Str & ": ")
+      for i in 0 ..< cols:
+        if i < n1:
+          let b = buf1[i]
+          let isDiff = (i >= n2 or b != buf2[i])
+          if isDiff and RedBg.len > 0: line1.add(RedBg)
+          line1.add(HexLUT[b][0])
+          line1.add(HexLUT[b][1])
+          if isDiff and RedBg.len > 0: line1.add(Reset)
+          line1.add(' ')
+        else:
+          line1.add("   ")
+      line1.add(" | ")
+      for i in 0 ..< cols:
+        if i < n1:
+          let c = char(buf1[i])
+          if c in ' ' .. '~': line1.add(c)
+          else: line1.add('.')
+        else:
+          line1.add(' ')
+      line1.add('\n')
+      safeWrite(outStream, line1)
+
+      # print file 2 line (+)
+      var line2 = newStringOfCap(128)
+      line2.add(Dim & "+ " & Reset)
+      line2.add(hex8Str & ": ")
+      for i in 0 ..< cols:
+        if i < n2:
+          let b = buf2[i]
+          let isDiff = (i >= n1 or b != buf1[i])
+          if isDiff and GreenBg.len > 0: line2.add(GreenBg)
+          line2.add(HexLUT[b][0])
+          line2.add(HexLUT[b][1])
+          if isDiff and GreenBg.len > 0: line2.add(Reset)
+          line1.add(' ')
+        else:
+          line2.add("   ")
+      line2.add(" | ")
+      for i in 0 ..< cols:
+        if i < n2:
+          let c = char(buf2[i])
+          if c in ' ' .. '~': line2.add(c)
+          else: line2.add('.')
+        else:
+          line2.add(' ')
+      line2.add('\n')
+      safeWrite(outStream, line2)
+      safeWrite(outStream, "\n")
+
+    offset += max(n1, n2)
+    if n1 <= 0 or n2 <= 0: break
+
 proc printHelp() =
   echo """
 neoxd - hex dumper and analyzer
@@ -1140,6 +1233,7 @@ Options:
   --no-color                   Disable ANSI colors (automatically set when saving to a file)
   --color                      Force ANSI colors even when writing to a file
   --no-pager                   Disable automatic terminal pager when outputting interactively
+  --diff                       Compare two binary files side-by-side in hex diff mode
   --min, --min-entropy:FLOAT   Only show blocks with entropy >= this value (0.0 to 8.0)
   --max, --max-entropy:FLOAT   Only show blocks with entropy <= this value (0.0 to 8.0)
   -p, --plain                  Output in plain hex format (continuous hex with no offsets or formatting)
@@ -1176,6 +1270,7 @@ proc main() =
   var reverseMode = false
   var restoreMode = false
   var plainMode = false
+  var diffMode = false
   var useColor = true
   var seekPos = 0
   var readLength = 0
@@ -1205,6 +1300,7 @@ proc main() =
       of "no-pager": noPager = true
       of "p", "plain": plainMode = true
       of "s", "summary": summaryMode = true
+      of "diff": diffMode = true
       of "r", "reverse": reverseMode = true
       of "R", "restore": restoreMode = true
       of "d", "debug": debugMode = true
@@ -1244,11 +1340,16 @@ proc main() =
     targetFile = positionalArgs[0]
 
   searchBytes = parseSearchBytes(searchPattern)
+
+  # switch on diff mode automatically if 2 pos files are provided
+  if positionalArgs.len == 2:
+    diffMode = true
   
   # run prufer validations (unless bypassed)
   if not noPrufer:
-    checkSyntaxSanity(positionalArgs)
-    checkFileSwap(targetFile, outputFile, isRestoreMode = (restoreMode or reverseMode))
+    checkSyntaxSanity(positionalArgs, isDiffMode = diffMode)
+    if not diffMode:
+      checkFileSwap(targetFile, outputFile, isRestoreMode = (restoreMode or reverseMode))
 
   if not explicitColorFlag:
     useColor = stdout.isatty() and outputFile == ""
@@ -1303,6 +1404,12 @@ proc main() =
       pager.close()
     elif outStream != stdout:
       close(outStream)
+
+  if diffMode:
+    if positionalArgs.len < 2:
+      quit("Error: Diff mode requires two target files (e.g., neoxd --diff file1 file2).")
+    processDiff(positionalArgs[0], positionalArgs[1], outStream, cols, useColor)
+    quit(0)
   
   if not inputIsOpen:
     if restoreMode: restoreDump(stdin, outStream, plainMode, useColor, activeMagicHeaders, magicFilter, cols)
