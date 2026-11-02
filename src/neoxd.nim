@@ -1199,7 +1199,7 @@ proc processDiff(filename1, filename2: string, outStream: File, cols: int = 16, 
           line2.add(HexLUT[b][0])
           line2.add(HexLUT[b][1])
           if isDiff and GreenBg.len > 0: line2.add(Reset)
-          line1.add(' ')
+          line2.add(' ') #bug in v1.1.0: was a typo, changed from line1.add to line2.add
         else:
           line2.add("   ")
       line2.add(" | ")
