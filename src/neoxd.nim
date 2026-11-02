@@ -606,7 +606,7 @@ proc getReadOnlyRegions(f: File, debugMode: bool = false): seq[FileRegion] =
 
   return @[]
 
-proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions: seq[FileRegion], magicList: openArray[tuple[sig: string, label: string]], filter: MagicFilter, outStream: File = stdout, useColor: bool = true, seekPos: int = 0, readLength: int = 0, cols: int = 16, windowSize: int = 256) =
+proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions: seq[FileRegion], magicList: openArray[tuple[sig: string, label: string]], filter: MagicFilter, outStream: File = stdout, useColor: bool = true, seekPos: int = 0, readLength: int = 0, cols: int = 16, windowSize: int = 256, anomalyMode: bool = false, anomalyDeltaThreshold: float = 1.5) =
   # initialize the buffered writer and ensure it flushes when the function returns
   var writer = initFastWriter(outStream)
   defer: 
