@@ -1,4 +1,4 @@
-neoxd - hex dumper and analyzer
+neoxd - hex dumper and analyzer (v1.1.0)
 
 ---
 
@@ -102,6 +102,38 @@ A simple comparison of neoxd with xxd and hexyl
 | **Binary Reversing (`-r`)** | Yes | **No** (Viewer only) | **Yes** (Plain & formatted reversal + malformed dump restoration `-R`)
 | **CLI Safety Guardrails** | None | None | **Yes** (PRUFER argument-swap protection & Levenshtein typo checks)
 | **Executable Awareness** | No | No | **Yes** (ELF header & section parsing)
+
+---
+
+v1.1.0
+
+A minor update after the first stable version, which adds a lot more additions which enhances the functionality, and some changes and fixes(actually not much fixes, but patches would follow soon).
+
+Added:
+
+* An anomaly detection flag which it only print blocks where entropy changes drastically or crosses a sudden delta threshold
+
+* A diff mode which prints a diff-style hex view for two file where changed bytes are highlighted
+
+* Alternate Grouping Controls (`-g` or `--group`)
+
+* Search & highlight (`--search` or `-S`)
+
+* Support for negative/reverse seeking
+
+* More formats for default `magicheaders`
+
+* Support for PE and Mach-O header bytes inspection in `getReadOnlyRegions`
+
+Fixed:
+
+* `processSummary` to prevent false +ves in detecting embedded file signs, `processStream` had alr prevented dis by querying `getReadOnlyRegions` to identify executable code and data sections and skipping magic detection inside them, `processSummary` wasn't using those ignored regions
+
+Changed:
+
+* to unified procedures for handling all broken pipe handling across all subroutines instead of the former method of each subroutine having its own checks
+
+* horizontal sub-block characters (0/8 to 8/8 width) instead of the former vertical one
 
 ---
 
