@@ -639,6 +639,9 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
   let BrightMagenta = if useColor: "\e[95m" else: ""
   let HighlightCode = if useColor: "\e[43;30m" else: ""
 
+  var prevChunkEntropy = 0.0
+  var isFirstBlock = true
+
   while true:
     var toRead = cols
     if readLength > 0:
@@ -655,6 +658,11 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
     let rawChunkEntropy = entropyCalc.getEntropy()
     let chunkEntropy = round(rawChunkEntropy * 100.0) / 100.0
     let entropyRatio = chunkEntropy / 8.0
+
+    # (v1.1.0) add: added an anomaly detection in which it only print blocks where entropy changes drastically or crosses a sudden delta threshold
+    # calculate entropy delta for anomaly detection
+    let entropyDelta = if isFirstBlock: 0.0 else: abs(chunkEntropy - prevChunkEntropy)
+    let isAnomaly = anomalyMode and (isFirstBlock or entropyDelta >= anomalyDeltaThreshold)
 
     # search pattern matching across prevBuffer + buffer
     var matchedRanges: seq[tuple[startOffset, endOffset: int]] = @[]
@@ -718,6 +726,25 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
       offset += bytesRead
       bytesProcessed += bytesRead
       continue
+
+    # (v1.1.0) add: added an anomaly detection in which it only print blocks where entropy changes drastically or crosses a sudden delta threshold
+    if magicLabel == "" and searchBytes.len == 0:
+      if anomalyMode and not isAnomaly:
+        prevChunkEntropy = chunkEntropy
+        isFirstBlock = false
+        prevBuffer = buffer
+        prevLen = bytesRead
+        offset += bytesRead
+        bytesProcessed += bytesRead
+        continue
+      elif chunkEntropy < minEntropy or chunkEntropy > maxEntropy:
+        prevChunkEntropy = chunkEntropy
+        isFirstBlock = false
+        prevBuffer = buffer
+        prevLen = bytesRead
+        offset += bytesRead
+        bytesProcessed += bytesRead
+        continue
     
     let colorCode = getAnsiColor(chunkEntropy, useColor)
     let bar = getEntropyBar(entropyRatio)
@@ -753,7 +780,7 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
         
       if i == splitIndex and cols > 1: lineBuf.add(' ')
 
-    # ascii Column with Highlighting
+    # ascii column with highlighting
     for i in 0 ..< cols:
       if i < bytesRead:
         let c = char(buffer[i])
@@ -793,12 +820,14 @@ proc processStream(f: File, minEntropy: float, maxEntropy: float, ignoredRegions
     except IOError as e:
       handleIoError(e, "Output stream write failed")
         
+    prevChunkEntropy = chunkEntropy
+    isFirstBlock = false
     prevBuffer = buffer
     prevLen = bytesRead
     offset += bytesRead
     bytesProcessed += bytesRead
 
-proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, ignoredRegions: seq[FileRegion], magicList: openArray[tuple[sig: string, label: string]], filter: MagicFilter, outStream: File = stdout, useColor: bool = true, seekPos: int = 0, readLength: int = 0, cols: int = 16, windowSize: int = 256) =
+proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, ignoredRegions: seq[FileRegion], magicList: openArray[tuple[sig: string, label: string]], filter: MagicFilter, outStream: File = stdout, useColor: bool = true, seekPos: int = 0, readLength: int = 0, cols: int = 16, windowSize: int = 256, anomalyMode: bool = false, anomalyDeltaThreshold: float = 1.5) =
   let fileSize = try: getFileSize(filename) except CatchableError: 0
   if fileSize == 0: return
   
@@ -832,6 +861,9 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
   let BrightMagenta = if useColor: "\e[95m" else: ""
   let HighlightCode = if useColor: "\e[43;30m" else: ""
 
+  var prevChunkEntropy = 0.0
+  var isFirstBlock = true
+
   while offset < totalBytes:
     let bytesRead = min(cols, totalBytes - offset)
     
@@ -841,6 +873,9 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
     let rawChunkEntropy = entropyCalc.getEntropy()
     let chunkEntropy = round(rawChunkEntropy * 100.0) / 100.0
     let entropyRatio = chunkEntropy / 8.0
+
+    let entropyDelta = if isFirstBlock: 0.0 else: abs(chunkEntropy - prevChunkEntropy)
+    let isAnomaly = anomalyMode and (isFirstBlock or entropyDelta >= anomalyDeltaThreshold)
 
     # search pattern matching across prevBuffer + buffer
     var matchedRanges: seq[tuple[startOffset, endOffset: int]] = @[]
@@ -903,6 +938,22 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
       prevLen = bytesRead
       offset += bytesRead
       continue
+
+    if magicLabel == "" and searchBytes.len == 0:
+      if anomalyMode and not isAnomaly:
+        prevChunkEntropy = chunkEntropy
+        isFirstBlock = false
+        for i in 0 ..< bytesRead: prevBuffer[i] = data[offset + i]
+        prevLen = bytesRead
+        offset += bytesRead
+        continue
+      elif chunkEntropy < minEntropy or chunkEntropy > maxEntropy:
+        prevChunkEntropy = chunkEntropy
+        isFirstBlock = false
+        for i in 0 ..< bytesRead: prevBuffer[i] = data[offset + i]
+        prevLen = bytesRead
+        offset += bytesRead
+        continue
     
     let colorCode = getAnsiColor(chunkEntropy, useColor)
     let bar = getEntropyBar(entropyRatio)
@@ -979,6 +1030,8 @@ proc processStreamMmap(filename: string, minEntropy: float, maxEntropy: float, i
     except IOError as e:
       handleIoError(e, "Output stream write failed")
         
+    prevChunkEntropy = chunkEntropy
+    isFirstBlock = false
     for i in 0 ..< bytesRead: prevBuffer[i] = data[offset + i]
     prevLen = bytesRead
     offset += bytesRead
@@ -1230,6 +1283,8 @@ Options:
   -s, --summary                Scan file and output an overall distribution summary
   -S, --search:PATTERN         Highlight occurrences of a hex pattern (e.g., 414243) or text # the argument for the search and highlight
   -o, --output:FILE            Save the hex dump output to a file for editing/analysis
+  --anomalies                  Only show blocks with sudden entropy shifts (structural anomalies)
+  --anomaly-delta:FLOAT        Minimum entropy change delta to trigger an anomaly (default: 1.5)
   --no-color                   Disable ANSI colors (automatically set when saving to a file)
   --color                      Force ANSI colors even when writing to a file
   --no-pager                   Disable automatic terminal pager when outputting interactively
@@ -1280,6 +1335,8 @@ proc main() =
   var debugMode = false
   var noPrufer = false
   var searchPattern = ""
+  var anomalyMode = false
+  var anomalyDeltaThreshold = 1.5
 
   var positionalArgs: seq[string] = @[]
   var p = initOptParser()
@@ -1322,6 +1379,11 @@ proc main() =
       of "color":
         useColor = true
         explicitColorFlag = true
+      of "anomalies": anomalyMode = true
+      of "anomaly-delta":
+        anomalyDeltaThreshold = parseFloat(p.requireVal(p.key))
+        if anomalyDeltaThreshold < 0.0 or anomalyDeltaThreshold > 8.0:
+          quit("Error: Anomaly delta threshold must be between 0.0 and 8.0.")
       of "h", "help": printHelp(); quit(0)
       of "v", "version": printVersion(); quit(0)
       of "min", "min-entropy": 
@@ -1417,7 +1479,7 @@ proc main() =
     elif reverseMode: reverseHexDump(stdin, outStream, cols)
     elif summaryMode: processSummary(stdin, @[], activeMagicHeaders, magicFilter, outStream, useColor, cols)
     elif plainMode: processPlainStream(stdin, outStream, cols)
-    else: processStream(stdin, minEntropy, maxEntropy, @[], activeMagicHeaders, magicFilter, outStream, useColor, seekPos, readLength, cols, windowSize)
+    else: processStream(stdin, minEntropy, maxEntropy, @[], activeMagicHeaders, magicFilter, outStream, useColor, seekPos, readLength, cols, windowSize, anomalyMode, anomalyDeltaThreshold)
   else:
     if restoreMode:
       restoreDump(f, outStream, plainMode, useColor, activeMagicHeaders, magicFilter, cols)
@@ -1447,15 +1509,15 @@ proc main() =
         if not isRegularFile:
           var fallbackF: File
           if open(fallbackF, targetFile):
-            processStream(fallbackF, minEntropy, maxEntropy, ignoredRegions, activeMagicHeaders, magicFilter, outStream, useColor, seekPos, readLength, cols, windowSize)
+            processStream(fallbackF, minEntropy, maxEntropy, ignoredRegions, activeMagicHeaders, magicFilter, outStream, useColor, seekPos, readLength, cols, windowSize, anomalyMode, anomalyDeltaThreshold)
             close(fallbackF)
         else:
           try:
-            processStreamMmap(targetFile, minEntropy, maxEntropy, ignoredRegions, activeMagicHeaders, magicFilter, outStream, useColor, seekPos, readLength, cols, windowSize)
+            processStreamMmap(targetFile, minEntropy, maxEntropy, ignoredRegions, activeMagicHeaders, magicFilter, outStream, useColor, seekPos, readLength, cols, windowSize, anomalyMode, anomalyDeltaThreshold)
           except CatchableError:
             var fallbackF: File
             if open(fallbackF, targetFile):
-              processStream(fallbackF, minEntropy, maxEntropy, ignoredRegions, activeMagicHeaders, magicFilter, outStream, useColor, seekPos, readLength, cols, windowSize)
+              processStream(fallbackF, minEntropy, maxEntropy, ignoredRegions, activeMagicHeaders, magicFilter, outStream, useColor, seekPos, readLength, cols, windowSize, anomalyMode, anomalyDeltaThreshold)
               close(fallbackF)
 
 when isMainModule:
